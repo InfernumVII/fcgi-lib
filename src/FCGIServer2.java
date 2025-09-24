@@ -5,6 +5,7 @@ import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class FCGIServer2 {
     private Selector selector;
@@ -12,10 +13,12 @@ public class FCGIServer2 {
 
     ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
     ExecutorService cpuExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 4);
-
+    AtomicInteger currentC = new AtomicInteger();
+    AtomicInteger proccesedI = new AtomicInteger();
+    AtomicInteger proccesedO = new AtomicInteger();
     public FCGIServer2(String host, int port) throws IOException{
         serverSocketChannel = ServerSocketChannel.open();
-        serverSocketChannel.socket().bind(new InetSocketAddress(host, port));
+        serverSocketChannel.socket().bind(new InetSocketAddress(host, port), 100);
         serverSocketChannel.configureBlocking(false);
     
         selector = Selector.open();
@@ -32,6 +35,7 @@ public class FCGIServer2 {
             selector.select();
     
             Set<SelectionKey> selectedKeys = selector.selectedKeys();
+            System.out.println("SelectedKeysSize: " + selectedKeys.size());
             Iterator<SelectionKey> i = selectedKeys.iterator();
             while (i.hasNext()) {
                 SelectionKey key = i.next();
@@ -44,6 +48,7 @@ public class FCGIServer2 {
                     key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);
                     final SocketChannel socketChannel = (SocketChannel) key.channel();
                     ioExecutor.execute(() -> {
+                        System.out.println(currentC.incrementAndGet());
                         try {
                             handleRead(socketChannel);
                         } catch (IOException e) {
@@ -75,14 +80,20 @@ public class FCGIServer2 {
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenRun(() -> {
             String hi = "Status: 200\nContent-Type: text/plain\n\nHello-From-JAVA!";
-            try {
-                writeSTDOUT(channel, hi.getBytes(StandardCharsets.UTF_8));
-                writeSTDOUT(channel, new byte[0]);
-                writeEndRequest(channel);
-                channel.close();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            ioExecutor.execute(() -> {
+                try {
+                    writeSTDOUT(channel, hi.getBytes(StandardCharsets.UTF_8));
+                    writeSTDOUT(channel, new byte[0]);
+                    writeEndRequest(channel);
+                    System.out.println("Output: " + proccesedO.incrementAndGet());
+                    channel.close();
+                    System.out.println("close c: " + currentC.decrementAndGet());
+                    
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                
+            });
         });
     } 
 
@@ -133,6 +144,9 @@ public class FCGIServer2 {
 
     private void handleAccept(SelectionKey key) throws IOException {
         SocketChannel socketChannel = serverSocketChannel.accept();
+        socketChannel.socket().setKeepAlive(true);
+        socketChannel.socket().setTcpNoDelay(true);
+        socketChannel.socket().setReuseAddress(true);
         socketChannel.configureBlocking(false);
         socketChannel.register(selector, SelectionKey.OP_READ);
     }
@@ -195,6 +209,7 @@ public class FCGIServer2 {
     }
     
     private void processStdin(ByteBuffer contentData, FCGIContext context){
+        System.out.println("Input: " + proccesedI.incrementAndGet());
         context.setStdinData(contentData);
         context.setReady(true);
     }
