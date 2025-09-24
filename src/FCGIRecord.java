@@ -13,6 +13,7 @@
          } FCGI_Record;
  */
 
+
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
@@ -64,5 +65,29 @@ public class FCGIRecord {
         return contentData;
     }
 
-    
+    public void setVersion(int version) {
+        this.version = version;
+    }
+
+    public void setType(int type) {
+        this.type = type;
+    }
+
+    public void setRequestId(int requestId) {
+        this.requestId = requestId;
+    }
+
+    public void setContentLength(int contentLength) {
+        this.contentLength = contentLength;
+    }
+
+    public void setPaddingLength(int paddingLength) {
+        this.paddingLength = paddingLength;
+    }
+
+    public void setContentData(ByteBuffer contentData) {
+        this.contentData = contentData;
+    }
+
+        
 }

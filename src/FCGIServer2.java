@@ -1,59 +1,42 @@
-
-import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
+import java.io.*;
+import java.net.*;
+import java.nio.*;
+import java.nio.channels.*;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.*;
+import java.util.concurrent.*;
 
-public class FCGIServer {
+public class FCGIServer2 {
     private Selector selector;
     private ServerSocketChannel serverSocketChannel;
+
     ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
     ExecutorService cpuExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 4);
-    ExecutorService responseExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 2);
-    private final Map<SocketChannel, ByteBuffer> channelBuffers = new ConcurrentHashMap<>();
 
-    public FCGIServer(String host, int port) throws IOException{
+    public FCGIServer2(String host, int port) throws IOException{
         serverSocketChannel = ServerSocketChannel.open();
         serverSocketChannel.socket().bind(new InetSocketAddress(host, port));
         serverSocketChannel.configureBlocking(false);
-
+    
         selector = Selector.open();
         serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
     }
 
-    public FCGIServer() throws IOException {
+    public FCGIServer2() throws IOException {
         this("127.0.0.1", 9000);
     }
+
 
     public void start() throws IOException {
         while (selector.isOpen()) {
             selector.select();
-
+    
             Set<SelectionKey> selectedKeys = selector.selectedKeys();
             Iterator<SelectionKey> i = selectedKeys.iterator();
             while (i.hasNext()) {
                 SelectionKey key = i.next();
                 i.remove();
-
+    
                 if (key.isAcceptable()) {
                     handleAccept(key);
                 }
@@ -72,61 +55,44 @@ public class FCGIServer {
         }
     }
 
-
-    private void handleAccept(SelectionKey key) throws IOException {
-        SocketChannel socketChannel = serverSocketChannel.accept();
-        socketChannel.configureBlocking(false);
-
-        channelBuffers.put(socketChannel, ByteBuffer.allocate(8192));
-        socketChannel.register(selector, SelectionKey.OP_READ);
-    }
-
-    private void handleRead(SocketChannel socketChannel) throws IOException {
-        cpuExecutor.execute(() -> {
-            ByteBuffer buffer = channelBuffers.get(socketChannel);
-            try {
-                while (socketChannel.read(buffer) > 0) {
-                    buffer.flip();
-                    
-                    processBuffer(socketChannel, buffer);
-                    
-                }
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-            
-        });
+    private void handleRead(SocketChannel channel) throws IOException {
         
-    }
-
-    private void processBuffer(SocketChannel socketChannel, ByteBuffer buffer) throws IOException  {
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
         FCGIContext fcgiContext = new FCGIContext();
         FCGIRecord record;
+        
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
         do {
-            record = readHeader(buffer);
+            record = readHeader(readExact(channel, ByteBuffer.allocate(8)));
+            record.setContentData(readExact(channel, ByteBuffer.allocate(record.getContentLength())));
             final FCGIRecord fcgiRecord = record;
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                         processType(fcgiRecord.getType(), 
-                                   fcgiRecord.getContentData().asReadOnlyBuffer(), 
+                                   fcgiRecord.getContentData(), 
                                    fcgiContext);
                     }, cpuExecutor);
             futures.add(future);
         } while (record.getType() != FCGIConstants.FCGIStdin);
+
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenRun(() -> {
-            // fcgiContext.getParams().forEach((k, v) -> {
-            //     System.out.printf("Key: %s, Value: %s\n", k, v);
-            // });
             String hi = "Status: 200\nContent-Type: text/plain\n\nHello-From-JAVA!";
             try {
-                writeSTDOUT(socketChannel, hi.getBytes(StandardCharsets.UTF_8));
-                writeSTDOUT(socketChannel, new byte[0]);
-                writeEndRequest(socketChannel);
-                socketChannel.close();
+                writeSTDOUT(channel, hi.getBytes(StandardCharsets.UTF_8));
+                writeSTDOUT(channel, new byte[0]);
+                writeEndRequest(channel);
+                channel.close();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         });
+    } 
+
+    private void write(SocketChannel socket, byte[] data, int type) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(8192);
+        buffer.put(createHeader(data.length, type));
+        buffer.put(data);
+    
+        buffer.flip();
+        socket.write(buffer);        
     }
 
     private byte[] createHeader(int dataLength, int type) {
@@ -139,16 +105,7 @@ public class FCGIServer {
         buffer.put((byte) 0); //reserved
         return buffer.array();
     }
-
-    private void write(SocketChannel socket, byte[] data, int type) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(8192);
-        buffer.put(createHeader(data.length, type));
-        buffer.put(data);
-
-        buffer.flip();
-        socket.write(buffer);        
-    }
-
+    
     private void writeEndRequest(SocketChannel socketChannel) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(8);
         buffer.putInt(0);
@@ -158,11 +115,28 @@ public class FCGIServer {
         buffer.put((byte) 0); //reserved
         write(socketChannel, buffer.array(), FCGIConstants.FCGIEndRequest);
     }
-
+    
     private void writeSTDOUT(SocketChannel socket, byte[] data) throws IOException {
         write(socket, data, FCGIConstants.FCGIStdout);
     }
-    
+
+    private ByteBuffer readExact(SocketChannel socketChannel, ByteBuffer buffer) throws IOException{
+        while (buffer.hasRemaining()) {
+            int bytesRead = socketChannel.read(buffer);
+            if (bytesRead == -1) {
+                throw new IOException("End of stream reached");
+            }
+        }
+        buffer.flip();
+        return buffer;
+    }
+
+    private void handleAccept(SelectionKey key) throws IOException {
+        SocketChannel socketChannel = serverSocketChannel.accept();
+        socketChannel.configureBlocking(false);
+        socketChannel.register(selector, SelectionKey.OP_READ);
+    }
+
     private FCGIRecord readHeader(ByteBuffer buffer) throws IOException {   
         int version = buffer.get() & 0xFF;
         int type = buffer.get() & 0xFF;
@@ -170,19 +144,17 @@ public class FCGIServer {
         int contentLength = buffer.getShort() & 0xFFFF;
         int paddingLength = buffer.get() & 0xFF;
         buffer.get(); // reserved
-        byte[] contentData = new byte[contentLength];
-        buffer.get(contentData);
-
+        // byte[] contentData = new byte[contentLength];
+        // buffer.get(contentData);
+    
         return new FCGIRecord(version, 
                                 type, 
                                 requestId, 
                                 contentLength, 
                                 paddingLength, 
-                                ByteBuffer.wrap(contentData));
+                                null);
     }
-
-
-
+    
     private void processType(int type, ByteBuffer data, FCGIContext context) {
         switch (type) {
             case FCGIConstants.FCGIBeginRequest:
@@ -198,14 +170,14 @@ public class FCGIServer {
                 break;
         }
     }
-
+    
     private void processBeginRequest(ByteBuffer contentData, FCGIContext context) {
         int role = contentData.getShort() & 0xFFFF;
         int flag = contentData.get() & 0xFF;
         context.setRole(role);
         context.setFlag(flag);
     }
-
+    
     private void processParams(ByteBuffer contentData, FCGIContext context) {
         while (contentData.hasRemaining()) {
             int nameLength = readLength(contentData);
@@ -221,12 +193,12 @@ public class FCGIServer {
                                         new String(valueData, StandardCharsets.UTF_8));
         }
     }
-
+    
     private void processStdin(ByteBuffer contentData, FCGIContext context){
         context.setStdinData(contentData);
         context.setReady(true);
     }
-
+    
     private static int readLength(ByteBuffer buffer) {
         int firstByte = buffer.get() & 0xFF;
         if ((firstByte & 0x80) == 0) {

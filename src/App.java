@@ -2,7 +2,7 @@
 
 public class App {
     public static void main(String[] args) throws Exception {
-        FCGIServer fcgiServer = new FCGIServer();
-        fcgiServer.start();
+        FCGIServer2 fcgiServer2 = new FCGIServer2();
+        fcgiServer2.start();
     }
 }
