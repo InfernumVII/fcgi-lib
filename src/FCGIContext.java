@@ -7,7 +7,6 @@ public class FCGIContext {
     private int flag;
     private ConcurrentHashMap<String, String> params = new ConcurrentHashMap<>();
     private ByteBuffer stdinData;
-    private boolean isReady;
 
     public FCGIContext() {
     }
@@ -51,17 +50,6 @@ public class FCGIContext {
         return "FCGIContext [role=" + role + ", flag=" + flag + ", params=" + params.size() + ", stdinData=" + stdinData.capacity() + "]";
     }
 
-
-
-    public boolean isReady() {
-        return isReady;
-    }
-
-
-
-    public void setReady(boolean isReady) {
-        this.isReady = isReady;
-    }
 
     
 }

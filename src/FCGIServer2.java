@@ -75,50 +75,19 @@ public class FCGIServer2 {
 
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenRun(() -> {
             String hi = "Status: 200\nContent-Type: text/plain\n\nHello-From-JAVA!";
+            FCGIWriteContext fcgiWriteContext = new FCGIWriteContext(channel);
             try {
-                writeSTDOUT(channel, hi.getBytes(StandardCharsets.UTF_8));
-                writeSTDOUT(channel, new byte[0]);
-                writeEndRequest(channel);
-                channel.close();
+                fcgiWriteContext.write(hi.getBytes(StandardCharsets.UTF_8));
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         });
     } 
 
-    private void write(SocketChannel socket, byte[] data, int type) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(8192);
-        buffer.put(createHeader(data.length, type));
-        buffer.put(data);
     
-        buffer.flip();
-        socket.write(buffer);        
-    }
 
-    private byte[] createHeader(int dataLength, int type) {
-        ByteBuffer buffer = ByteBuffer.allocate(FCGIConstants.FCGIHeaderLen);
-        buffer.put((byte) (1 & 0xFF)); //version
-        buffer.put((byte) (type & 0xFF)); //type
-        buffer.putShort((short) (1 & 0xFFFF)); //requestId
-        buffer.putShort((short) (dataLength & 0xFFFF)); //contentLength
-        buffer.put((byte) (0 & 0xFF)); //paddingLength
-        buffer.put((byte) 0); //reserved
-        return buffer.array();
-    }
+
     
-    private void writeEndRequest(SocketChannel socketChannel) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(8);
-        buffer.putInt(0);
-        buffer.put((byte) (FCGIConstants.FCGIRequestComplete & 0xFF));
-        buffer.put((byte) 0); //reserved
-        buffer.put((byte) 0); //reserved
-        buffer.put((byte) 0); //reserved
-        write(socketChannel, buffer.array(), FCGIConstants.FCGIEndRequest);
-    }
-    
-    private void writeSTDOUT(SocketChannel socket, byte[] data) throws IOException {
-        write(socket, data, FCGIConstants.FCGIStdout);
-    }
 
     private ByteBuffer readExact(SocketChannel socketChannel, ByteBuffer buffer) throws IOException{
         while (buffer.hasRemaining()) {
@@ -196,7 +165,6 @@ public class FCGIServer2 {
     
     private void processStdin(ByteBuffer contentData, FCGIContext context){
         context.setStdinData(contentData);
-        context.setReady(true);
     }
     
     private static int readLength(ByteBuffer buffer) {
